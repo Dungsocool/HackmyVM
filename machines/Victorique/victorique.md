@@ -293,6 +293,33 @@ Opening the output text file, setting a tiny font size (or zooming out completel
 
 ---
 
+### **EXPLOITATION FLOW & MINDSET SUMMARY**
+
+To visually reconstruct the entire penetration testing methodology used in this lab, here is the detailed exploitation flow and mental model from external network/web reconnaissance to root compromise:
+
+**Phase 1: Gaining Initial Foothold (User `victorique`)**
+
+1. **Service Discovery:** We begin with an `nmap -sCV` scan to map all open ports. This exposes two primary services: Port 22 (SSH — OpenSSH 8.4p1) and Port 80 (Web — Apache httpd 2.4.62).
+2. **Virtual Host Routing Bypass:** Direct IP access yields *"Access Denied: Please use the domain name victorique.xyz"*. This is a signature indicator of **Apache Virtual Host routing**—where the server processes traffic based on the HTTP `Host` header rather than the raw IP. We bypass this restriction by adding the `victorique.xyz` record to the `/etc/hosts` file of our attack machine to hit the correct vhost.
+3. **Subdomain Enumeration & Wildcard Vhosts:** The homepage has no forms or sensitive interfaces. Realizing other entry points must exist, we perform **subdomain fuzzing via ffuf**. A common pitfall here is sending requests directly to the IP without the proper `Host` header, which only hits the default vhost and returns endless false positives. We resolve this by fuzzing with the `-H "Host: FUZZ.victorique.xyz"` header.
+4. **Isolating Hidden Vhosts:** Fuzzing yields numerous size `89` responses due to a wildcard vhost setup (`*.victorique.xyz`). By applying the `-fs 89` filter, we isolate two valid subdomains: `www` and `gifts.victorique.xyz`.
+5. **Credential Hunting & Logic Trap:** Exploring `gifts.victorique.xyz` yields administrative credentials (`ookami` / `GoS1Ck`). Attempting to use these on the main portal's login page fails, triggering a hint: *"The cunning gray wolf has deceived you. The gift lies deeper."* This confirms the login page is a logical rabbit hole and redirects our focus back to the `gifts` subdomain.
+6. **Deeper Resource Scanning:** Running deep directory fuzzing on `gifts.victorique.xyz` using the `directory-list-2.3-medium.txt` list exposes a hidden text file: `greatgifts.txt`. This file reveals a new hidden subdomain: `Ka4zuyaKujo0`.
+7. **Exploiting CVE-2024-36401:** We add `Ka4zuyaKujo0.victorique.xyz` to `/etc/hosts`. Accessing it reveals a Jetty 404 page listing active contexts, exposing `/geoserver/` running version `2.25.1`. We identify that this version is vulnerable to **CVE-2024-36401** (unauthenticated XPath injection RCE via WFS requests).
+8. **Shell Execution:** We set up a netcat listener (`nc -lvnp 4445`) and send an XML payload containing a reverse shell command. Although the server returns an HTTP 400 ClassCastException due to a Java casting issue, the code executes successfully. We catch the reverse shell as user `victorique` and immediately upgrade it to an interactive TTY shell via Python `pty` to ensure process stability.
+
+**Phase 2: Privilege Escalation (User `victorique` to `root`)**
+
+1. **Credential Hunting in Web Root:** As `sudo -l` demands a password we do not have, we fall back on fundamental post-exploitation reconnaissance: searching the web root (`/var/www/html`). Developers frequently leave hardcoded credentials in source code. Running `grep -rn "victorique" /var/www/html` exposes the user's password (`shinigami_qujo`) within a comment block in `login.php`.
+2. **Sudo Capability Analysis:** Armed with the password, `sudo -l` reveals a highly powerful entry: `(ALL) /usr/bin/python3 /opt/img2txt.py *`. This allows execution of the image-to-text script as any user (including root) with arbitrary parameters.
+3. **Deciphering the Clues:** The home directory's `hint.txt` file reads: *"Found some useful fragments. Converted them into a visual representation."* Correlating **"fragments"** and **"visual representation"** with the root-privileged `img2txt.py` script, we deduce that **the root password has been split into multiple fragments, each saved as a hidden image file readable only by root.**
+4. **Locating Hidden Images:** We run `find / -type f -perm 700 2>/dev/null` to search for files with highly restrictive `700` permissions (only readable by root). This uncovers hidden image files strategically tucked away in system directories, such as `/etc/ssh/.shinigami.png`, `/usr/games/.haru.ppm`, and `/var/www/html/IoIooIIOIOio/sunset.webp`.
+5. **Decoding ASCII Art Fragments:** We execute a Bash loop to feed the discovered images into the root-privileged `img2txt.py` script. The script outputs massive ASCII art blocks. By **zooming out our terminal window**, the characters align to reveal three text fragments: **`C11pp3r5`**, **`ch4mp`**, and **`10n5h1p`**.
+6. **Password Assembly & Root Compromise:** We use a quick Python `itertools` script to generate all 6 permutations of the fragments. Attempting `su root` with each combination successfully unlocks the root shell using the password: **`C11pp3r5ch4mp10n5h1p`**.
+7. **Obtaining the Root Flag:** Inside `/root`, we locate `root.png`. We decode it using `img2txt.py --num_cols 1000`, open the output in a browser, and zoom out completely to read the final flag: **`flag{root-Gosick-Victorique De Blois}`**.
+
+---
+
 ### **KEY TAKEAWAYS & LESSONS LEARNED**
 
 1. **Virtual Host ≠ IP (The `Host` Header is King):** 
